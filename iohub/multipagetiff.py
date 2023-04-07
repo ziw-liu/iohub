@@ -87,15 +87,14 @@ class MMStack:
     def __delitem__(self, key, value):
         raise PermissionError("MMStack is read-only.")
 
-    def close(self):
-        self._store.close()
-        self._first_tif.close()
-
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def close(self):
+        self._first_tif.close()
 
 
 class MicromanagerOmeTiffReader(ReaderBase):
