@@ -1,12 +1,56 @@
+# TODO: remove this in the future (PEP deferred for 3.11, now 3.12?)
+from __future__ import annotations
+
 import glob
+import logging
 import os
 from copy import copy
+from typing import TYPE_CHECKING
 
 import numpy as np
 import zarr
 from tifffile import TiffFile
 
 from iohub.reader_base import ReaderBase
+
+if TYPE_CHECKING:
+    from _typeshed import StrOrBytesPath
+
+
+class MMStack:
+    """Micro-Manager multi-file OME-TIFF (MMStack) reader.
+
+    Parameters
+    ----------
+    data_path : StrOrBytesPath
+        Path to the directory containing OME-TIFF files
+        or the path to the first OME-TIFF file in the series
+    """
+
+    def __init__(self, data_path: StrOrBytesPath):
+        super().__init__()
+        data_path = str(data_path)
+        if os.path.isfile(data_path):
+            if "ome.tif" in os.path.basename(data_path):
+                first_file = data_path
+            else:
+                raise ValueError("{data_path} is not a OME-TIFF file.")
+        elif os.path.isdir(data_path):
+            files = glob.glob(os.path.join(data_path, "*.ome.tif"))
+            if not files:
+                raise FileNotFoundError(
+                    f"Path {data_path} contains no OME-TIFF files, "
+                )
+            else:
+                first_file = files[0]
+        self._first_file = TiffFile(first_file)
+        self.store = self._first_file.aszarr()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 class MicromanagerOmeTiffReader(ReaderBase):
