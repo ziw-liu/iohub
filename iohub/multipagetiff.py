@@ -56,7 +56,7 @@ class MMStack:
             for axis, size in zip(series.get_axes(), series.get_shape())
         )
         axes = ("R", "T", "C", "Z", "Y", "X")
-        dims = dict((ax, raw_dims[ax] or 1) for ax in axes)
+        dims = dict((ax, raw_dims.get(ax) or 1) for ax in axes)
         logging.debug(f"Got dataset dimensions from tifffile: {dims}.")
         (
             self.positions,
@@ -78,17 +78,14 @@ class MMStack:
     def __len__(self):
         return self.positions
 
-    def __getitem__(self, key):
-        return
+    def __getitem__(self, key: int):
+        return self.xdata.sel(P=key)
 
     def __setitem__(self, key, value):
         raise PermissionError("MMStack is read-only.")
 
     def __delitem__(self, key, value):
         raise PermissionError("MMStack is read-only.")
-
-    def _get_position(self):
-        pass
 
     def close(self):
         self._store.close()
