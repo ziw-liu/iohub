@@ -7,10 +7,10 @@ import os
 from copy import copy
 from typing import TYPE_CHECKING
 
+import dask.array as da
 import numpy as np
-
-import zarr
 import xarray as xr
+import zarr
 from tifffile import TiffFile
 
 from iohub.reader_base import ReaderBase
@@ -27,9 +27,12 @@ class MMStack:
     data_path : StrOrBytesPath
         Path to the directory containing OME-TIFF files
         or the path to the first OME-TIFF file in the series
+    dask_item : bool, optional
+        Whether to return dask arrays instead of xarray from ``__getitem__()``,
+        by default False
     """
 
-    def __init__(self, data_path: StrOrBytesPath):
+    def __init__(self, data_path: StrOrBytesPath, dask_item: bool = False):
         super().__init__()
         data_path = str(data_path)
         if os.path.isfile(data_path):
@@ -45,9 +48,11 @@ class MMStack:
                 )
             else:
                 first_file = files[0]
+        self.dirname = os.path.basename(os.path.dirname(first_file))
         self._first_tif = TiffFile(first_file, is_mmstack=True)
         self._parse_data()
         self._store = None
+        self._asdask = dask_item
 
     def _parse_data(self):
         series = self._first_tif.series[0]
@@ -66,26 +71,37 @@ class MMStack:
             self.height,
             self.width,
         ) = dims.values()
-        self._store = series.aszarr(multiscales=True)
+        self._store = series.aszarr()
         logging.debug(f"Opened {self._store}.")
-        img = xr.open_zarr(self._store, consolidated=False)
-        self.xdata = (
-            img.expand_dims([ax for ax in axes if ax not in img.dims])
-            .transpose(*axes)
-            .rename_dims(R="P")
-        )
+        data = da.from_zarr(zarr.open(self._store))
+        img = xr.DataArray(data, dims=raw_dims, name=self.dirname)
+        self._xdata = img.expand_dims(
+            [ax for ax in axes if ax not in img.dims]
+        ).transpose(*axes)
+
+    @property
+    def xdata(self):
+        return self._xdata
 
     def __len__(self):
         return self.positions
 
     def __getitem__(self, key: int):
-        return self.xdata.sel(P=key)
+        item = self.xdata.sel(R=key)
+        return item.data if self._asdask else item
 
     def __setitem__(self, key, value):
         raise PermissionError("MMStack is read-only.")
 
     def __delitem__(self, key, value):
         raise PermissionError("MMStack is read-only.")
+
+    def __contains__(self, key):
+        return key in self.xdata.R
+
+    def __iter__(self):
+        for key in self.xdata.R:
+            yield self[key]
 
     def __enter__(self):
         return self
