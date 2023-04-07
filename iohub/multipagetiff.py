@@ -8,7 +8,9 @@ from copy import copy
 from typing import TYPE_CHECKING
 
 import numpy as np
+
 import zarr
+import xarray as xr
 from tifffile import TiffFile
 
 from iohub.reader_base import ReaderBase
@@ -43,8 +45,54 @@ class MMStack:
                 )
             else:
                 first_file = files[0]
-        self._first_file = TiffFile(first_file)
-        self.store = self._first_file.aszarr()
+        self._first_tif = TiffFile(first_file, is_mmstack=True)
+        self._parse_data()
+        self._store = None
+
+    def _parse_data(self):
+        series = self._first_tif.series[0]
+        raw_dims = dict(
+            (axis, size)
+            for axis, size in zip(series.get_axes(), series.get_shape())
+        )
+        axes = ("R", "T", "C", "Z", "Y", "X")
+        dims = dict((ax, raw_dims[ax] or 1) for ax in axes)
+        logging.debug(f"Got dataset dimensions from tifffile: {dims}.")
+        (
+            self.positions,
+            self.frames,
+            self.channels,
+            self.slices,
+            self.height,
+            self.width,
+        ) = dims.values()
+        self._store = series.aszarr(multiscales=True)
+        logging.debug(f"Opened {self._store}.")
+        img = xr.open_zarr(self._store, consolidated=False)
+        self.xdata = (
+            img.expand_dims([ax for ax in axes if ax not in img.dims])
+            .transpose(*axes)
+            .rename_dims(R="P")
+        )
+
+    def __len__(self):
+        return self.positions
+
+    def __getitem__(self, key):
+        return
+
+    def __setitem__(self, key, value):
+        raise PermissionError("MMStack is read-only.")
+
+    def __delitem__(self, key, value):
+        raise PermissionError("MMStack is read-only.")
+
+    def _get_position(self):
+        pass
+
+    def close(self):
+        self._store.close()
+        self._first_tif.close()
 
     def __enter__(self):
         return self
