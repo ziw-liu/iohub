@@ -6,6 +6,8 @@ from iohub.reader import print_info
 
 VERSION = __version__
 
+_DATASET_PATH = click.Path(exists=True, file_okay=False, resolve_path=True)
+
 
 @click.group()
 @click.help_option("-h", "--help")
@@ -16,7 +18,12 @@ def cli():
 
 @cli.command()
 @click.help_option("-h", "--help")
-@click.argument("files", nargs=-1, required=True)
+@click.argument(
+    "files",
+    nargs=-1,
+    required=True,
+    type=_DATASET_PATH,
+)
 @click.option(
     "--verbose",
     "-v",
@@ -42,7 +49,7 @@ def info(files, verbose):
     "--input",
     "-i",
     required=True,
-    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    type=_DATASET_PATH,
     help="Input Micro-Manager TIFF dataset directory",
 )
 @click.option(
@@ -60,6 +67,15 @@ def info(files, verbose):
     help="Data type, 'ometiff', 'ndtiff', 'singlepagetiff'",
 )
 @click.option(
+    "--scale-voxels",
+    "-s",
+    required=False,
+    type=bool,
+    default=True,
+    help="Write voxel size (XY pixel size and Z-step, in micrometers) "
+    "as scale coordinate transformation in NGFF. By default true.",
+)
+@click.option(
     "--grid-layout",
     "-g",
     required=False,
@@ -73,12 +89,13 @@ def info(files, verbose):
     is_flag=True,
     help="Dump postion labels in MM metadata to Omero metadata",
 )
-def convert(input, output, format, grid_layout, label_positions):
+def convert(input, output, format, scale_voxels, grid_layout, label_positions):
     """Converts Micro-Manager TIFF datasets to OME-Zarr"""
     converter = TIFFConverter(
         input_dir=input,
         output_dir=output,
         data_type=format,
+        scale_voxels=scale_voxels,
         grid_layout=grid_layout,
         label_positions=label_positions,
     )

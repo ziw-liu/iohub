@@ -1,7 +1,40 @@
-ngff
-~~~~~~~~~~~~~
+OME-NGFF (OME-Zarr)
+===================
 
-open_ome_zarr
-    .. currentmodule:: iohub.ngff
+.. module:: iohub
 
-    .. autofunction:: open_ome_zarr
+Convenience
+-----------
+
+`open_ome_zarr`
+^^^^^^^^^^^^^^^
+.. autofunction:: open_ome_zarr
+
+
+NGFF Nodes
+----------
+
+.. currentmodule:: iohub.ngff
+
+
+`NGFFNode`
+^^^^^^^^^^
+
+.. autoclass:: NGFFNode
+    :members:
+
+`Position`
+^^^^^^^^^^
+.. autoclass:: Position
+    :members:
+
+
+`TiledPosition`
+^^^^^^^^^^^^^^^
+.. autoclass:: TiledPosition
+    :members:
+
+`Plate`
+^^^^^^^
+.. autoclass:: Plate
+    :members:

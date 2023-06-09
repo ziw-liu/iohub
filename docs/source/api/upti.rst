@@ -1,8 +1,8 @@
-UPTIReader
-~~~~~~~~~~
+Read PTI TIFF
+=============
 
-    .. currentmodule:: iohub.upti
+.. currentmodule:: iohub.upti
 
-    .. autoclass:: UPTIReader
-       :members:
-       :inherited-members:
+.. autoclass:: UPTIReader
+    :members:
+    :inherited-members:

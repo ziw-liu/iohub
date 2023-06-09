@@ -1,8 +1,8 @@
-MicromanagerSequenceReader
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Read MM TIFF sequence
+=====================
 
-    .. currentmodule:: iohub.singlepagetiff
+.. currentmodule:: iohub.singlepagetiff
 
-    .. autoclass:: MicromanagerSequenceReader
-       :members:
-       :inherited-members:
+.. autoclass:: MicromanagerSequenceReader
+    :members:
+    :inherited-members:

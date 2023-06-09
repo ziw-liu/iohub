@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
-from typing import TYPE_CHECKING, Generator, List, Literal, Tuple, Union
+from copy import deepcopy
+from typing import TYPE_CHECKING, Generator, Literal, Sequence, Union
 
 import numpy as np
 import zarr
@@ -70,6 +72,11 @@ def _open_store(
             f"Cannot open Zarr root group at {store_path}"
         ) from e
     return root
+
+
+def _scale_integers(values: Sequence[int], factor: int) -> tuple[int, ...]:
+    """Computes the ceiling of the input sequence divided by the factor."""
+    return tuple(int(math.ceil(v / factor)) for v in values)
 
 
 class NGFFNode:
@@ -490,9 +497,9 @@ class Position(NGFFNode):
         Root Zarr group holding arrays
     zattr : Attributes
         Zarr attributes of the group
-    channel_names : List[str]
+    channel_names : list[str]
         Name of the channels
-    axes : List[AxisMeta]
+    axes : list[AxisMeta]
         Axes metadata
     """
 
@@ -552,7 +559,7 @@ class Position(NGFFNode):
 
     @property
     def data(self):
-        """.. Warning:
+        """.. warning::
             This property does *NOT* aim to retrieve all the arrays.
             And it may also fail to retrive any data if arrays exist but
             are not named conventionally.
@@ -625,7 +632,7 @@ class Position(NGFFNode):
         name: str,
         data: NDArray,
         chunks: tuple[int] = None,
-        transform: List[TransformationMeta] = None,
+        transform: list[TransformationMeta] = None,
         check_shape: bool = True,
     ):
         """Create a new image array in the position.
@@ -639,7 +646,7 @@ class Position(NGFFNode):
         chunks : tuple[int], optional
             Chunk size, by default None.
             ZYX stack size will be used if not specified.
-        transform : List[TransformationMeta], optional
+        transform : list[TransformationMeta], optional
             List of coordinate transformations, by default None.
             Should be specified for a non-native resolution level.
         check_shape : bool, optional
@@ -669,7 +676,7 @@ class Position(NGFFNode):
         shape: tuple[int],
         dtype: DTypeLike,
         chunks: tuple[int] = None,
-        transform: List[TransformationMeta] = None,
+        transform: list[TransformationMeta] = None,
         check_shape: bool = True,
     ):
         """Create a new zero-filled image array in the position.
@@ -690,7 +697,7 @@ class Position(NGFFNode):
         chunks : tuple[int], optional
             Chunk size, by default None.
             ZYX stack size will be used if not specified.
-        transform : List[TransformationMeta], optional
+        transform : list[TransformationMeta], optional
             List of coordinate transformations, by default None.
             Should be specified for a non-native resolution level.
         check_shape : bool, optional
@@ -748,7 +755,7 @@ class Position(NGFFNode):
     def _create_image_meta(
         self,
         name: str,
-        transform: List[TransformationMeta] = None,
+        transform: list[TransformationMeta] = None,
         extra_meta: dict = None,
     ):
         if not transform:
@@ -781,7 +788,7 @@ class Position(NGFFNode):
         self,
         id: int,
         name: str,
-        clims: List[Tuple[float, float, float, float]] = None,
+        clims: list[tuple[float, float, float, float]] = None,
     ):
         if not clims:
             clims = [None] * len(self.channel_names)
@@ -900,8 +907,106 @@ class Position(NGFFNode):
         ortho_sel[ch_ax] = ch_idx
         img.set_orthogonal_selection(tuple(ortho_sel), data)
 
+    def initialize_pyramid(self, levels: int) -> None:
+        """
+        Initializes the pyramid arrays with a down scaling of 2 per level.
+        Decimals shapes are rounded up to ceiling.
+        Scales metadata are also updated.
+
+        Parameters
+        ----------
+        levels : int
+            Number of down scaling levels, if levels is 1 nothing happens.
+        """
+        array = self.data
+        for level in range(1, levels):
+            factor = 2**level
+
+            shape = array.shape[:-3] + _scale_integers(
+                array.shape[-3:], factor
+            )
+
+            chunks = _pad_shape(
+                _scale_integers(array.shape[-3:], factor), len(shape)
+            )
+
+            transforms = deepcopy(
+                self.metadata.multiscales[0]
+                .datasets[0]
+                .coordinate_transformations
+            )
+            for tr in transforms:
+                if tr.type == "scale":
+                    for i in range(len(tr.scale))[-3:]:
+                        tr.scale[i] /= factor
+
+            self.create_zeros(
+                name=str(level),
+                shape=shape,
+                dtype=array.dtype,
+                chunks=chunks,
+                transform=transforms,
+            )
+
+    @property
+    def scale(self) -> list[float]:
+        """
+        Helper function for scale transform metadata of
+        highest resolution scale.
+        """
+        scale = [1] * self.data.ndim
+        transforms = (
+            self.metadata.multiscales[0].datasets[0].coordinate_transformations
+        )
+        for trans in transforms:
+            if trans.type == "scale":
+                if len(trans.scale) != len(scale):
+                    raise RuntimeError(
+                        f"Length of scale transformation {len(trans.scale)} "
+                        f"does not match data dimension {len(scale)}."
+                    )
+                scale = [s1 * s2 for s1, s2 in zip(scale, trans.scale)]
+        return scale
+
+    def set_transform(
+        self,
+        image: Union[str, Literal["*"]],
+        transform: list[TransformationMeta],
+    ):
+        """Set the coordinate transformations metadata
+        for one image array or the whole FOV.
+
+        Parameters
+        ----------
+        image : Union[str, Literal["*"]]
+            Name of one image array (e.g. "0") to transform,
+            or "*" for the whole FOV
+        transform : list[TransformationMeta]
+            List of transformations to apply
+            (:py:class:`iohub.ngff_meta.TransformationMeta`)
+        """
+        if image == "*":
+            self.metadata.multiscales[0].coordinate_transformations = transform
+        elif image in self:
+            for i, dataset_meta in enumerate(
+                self.metadata.multiscales[0].datasets
+            ):
+                if dataset_meta.path == image:
+                    self.metadata.multiscales[0].datasets[i] = DatasetMeta(
+                        path=image, coordinate_transformations=transform
+                    )
+        else:
+            raise ValueError(f"Key {image} not recognized.")
+        self.dump_meta()
+
 
 class TiledPosition(Position):
+    """Variant of the NGFF position node
+    with convenience methods to create and access tiled arrays.
+    Other parameters and attributes are the same as
+    :py:class:`iohub.ngff.Position`.
+    """
+
     _MEMBER_TYPE = TiledImageArray
 
     def make_tiles(
@@ -910,7 +1015,7 @@ class TiledPosition(Position):
         grid_shape: tuple[int, int],
         tile_shape: tuple[int],
         dtype: DTypeLike,
-        transform: List[TransformationMeta] = None,
+        transform: list[TransformationMeta] = None,
         chunk_dims: int = 2,
     ):
         """Make a tiled image array filled with zeros.
@@ -926,7 +1031,7 @@ class TiledPosition(Position):
             Shape of each tile (up to 5D).
         dtype : DTypeLike
             Data type in NumPy convention
-        transform : List[TransformationMeta], optional
+        transform : list[TransformationMeta], optional
             List of coordinate transformations, by default None.
             Should be specified for a non-native resolution level.
         chunk_dims : int, optional
@@ -1138,10 +1243,10 @@ class Plate(NGFFNode):
         self,
         group: zarr.Group,
         parse_meta: bool = True,
-        channel_names: List[str] = None,
+        channel_names: list[str] = None,
         axes: list[AxisMeta] = None,
         name: str = None,
-        acquisitions: List[AcquisitionMeta] = None,
+        acquisitions: list[AcquisitionMeta] = None,
         version: Literal["0.1", "0.4"] = "0.4",
         overwriting_creation: bool = False,
     ):
@@ -1157,8 +1262,6 @@ class Plate(NGFFNode):
         self._acquisitions = (
             [AcquisitionMeta(id=0)] if not acquisitions else acquisitions
         )
-        self._rows = {}
-        self._cols = {}
 
     def _parse_meta(self):
         if plate_meta := self.zattrs.get("plate"):
@@ -1202,12 +1305,25 @@ class Plate(NGFFNode):
             self.metadata.field_count = len(list(self.positions()))
         self.zattrs.update({"plate": self.metadata.dict(**TO_DICT_SETTINGS)})
 
-    @staticmethod
-    def _auto_idx(name: str, known: dict[str, int]):
-        if idx := known.get(name):
-            return idx
-        used = known.values()
-        return max(used) + 1 if used else 0
+    def _auto_idx(
+        self,
+        name: "str",
+        index: Union[int, None],
+        axis_name: Literal["row", "column"],
+    ):
+        if index is not None:
+            return index
+        elif not hasattr(self, "metadata"):
+            return 0
+        else:
+            part = ["row", "column"].index(axis_name)
+            all_indices = []
+            for well_index in self.metadata.wells:
+                index = getattr(well_index, f"{axis_name}_index")
+                if well_index.path.split("/")[part] == name:
+                    return index
+                all_indices.append(index)
+            return max(all_indices) + 1
 
     def _build_meta(
         self,
@@ -1259,33 +1375,31 @@ class Plate(NGFFNode):
         # normalize input
         row_name = normalize_storage_path(row_name)
         col_name = normalize_storage_path(col_name)
-        row_index = self._auto_idx(row_index, self._rows)
-        col_index = self._auto_idx(col_index, self._cols)
+        row_meta = PlateAxisMeta(name=row_name)
+        col_meta = PlateAxisMeta(name=col_name)
+        row_index = self._auto_idx(row_name, row_index, "row")
+        col_index = self._auto_idx(col_name, col_index, "column")
         # build well metadata
         well_index_meta = WellIndexMeta(
-            path='/'.join([row_name, col_name]),
+            path="/".join([row_name, col_name]),
             row_index=row_index,
             column_index=col_index,
         )
-        col_meta = PlateAxisMeta(name=col_name)
-        # create new row if needed
-        if row_name not in self._rows:
-            row_grp = self.zgroup.create_group(
-                row_name, overwrite=self._overwrite
-            )
-            row_meta = PlateAxisMeta(name=row_name)
-            self._rows[row_name] = row_index
-            if not hasattr(self, "metadata"):
-                self._build_meta(row_meta, col_meta, well_index_meta)
-            else:
-                self.metadata.rows.append(row_meta)
-                self.metadata.wells.append(well_index_meta)
+        if not hasattr(self, "metadata"):
+            self._build_meta(row_meta, col_meta, well_index_meta)
         else:
-            row_grp = self.zgroup[row_name]
             self.metadata.wells.append(well_index_meta)
+        # create new row if needed
+        if row_name not in self:
+            row_grp = self.zgroup.create_group(
+                row_meta.name, overwrite=self._overwrite
+            )
+            if row_meta not in self.metadata.rows:
+                self.metadata.rows.append(row_meta)
+        else:
+            row_grp = self[row_name].zgroup
         if col_meta not in self.metadata.columns:
             self.metadata.columns.append(col_meta)
-            self._cols[col_name] = col_index
         # create well
         well_grp = row_grp.create_group(col_name, overwrite=self._overwrite)
         self.dump_meta()
@@ -1361,7 +1475,7 @@ class Plate(NGFFNode):
             for _, well in row.wells():
                 yield well.zgroup.path, well
 
-    def positions(self):
+    def positions(self) -> Generator[tuple[str, Position], None, None]:
         """Returns a generator that iterate over the path and value
         of all the positions (along rows, columns, and wells) in the plate.
 
@@ -1379,7 +1493,7 @@ def open_ome_zarr(
     store_path: StrOrBytesPath,
     layout: Literal["auto", "fov", "hcs", "tiled"] = "auto",
     mode: Literal["r", "r+", "a", "w", "w-"] = "r",
-    channel_names: List[str] = None,
+    channel_names: list[str] = None,
     axes: list[AxisMeta] = None,
     version: Literal["0.1", "0.4"] = "0.4",
     synchronizer: Union[
@@ -1402,8 +1516,7 @@ def open_ome_zarr(
         "tiled" opens a "fov" layout with tiled image array
         (cannot be automatically inferred since this not NGFF-specified);
         by default "auto"
-    mode : Literal["r+", "a", "w-"], optional
-        mode : Literal["r", "r+", "a", "w", "w-"], optional
+    mode : Literal["r", "r+", "a", "w", "w-"], optional
         Persistence mode:
         'r' means read only (must exist);
         'r+' means read/write (must exist);
@@ -1411,7 +1524,7 @@ def open_ome_zarr(
         'w' means create (overwrite if exists);
         'w-' means create (fail if exists),
         by default "r".
-    channel_names : List[str], optional
+    channel_names : list[str], optional
         Channel names used to create a new data store,
         ignored for existing stores,
         by default None
@@ -1438,7 +1551,10 @@ def open_ome_zarr(
     Returns
     -------
     Dataset
-        NGFF node object (`Position`, `Plate`, or `TiledPosition`)
+        NGFF node object
+        (:py:class:`iohub.ngff.Position`,
+        :py:class:`iohub.ngff.Plate`,
+        or :py:class:`iohub.ngff.TiledPosition`)
     """
     if mode == "a":
         mode = ("w-", "r+")[int(os.path.exists(store_path))]
